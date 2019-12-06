@@ -1,21 +1,22 @@
-﻿using System;
+﻿using DapperExtensions.Mapper;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using DapperExtensions.Mapper;
 
 namespace DapperExtensions.Sql
 {
     public interface ISqlGenerator
     {
         IDapperExtensionsConfiguration Configuration { get; }
-        
+
         string Select(IClassMapper classMap, IPredicate predicate, IList<ISort> sort, IDictionary<string, object> parameters);
         string SelectPaged(IClassMapper classMap, IPredicate predicate, IList<ISort> sort, int page, int resultsPerPage, IDictionary<string, object> parameters);
         string SelectSet(IClassMapper classMap, IPredicate predicate, IList<ISort> sort, int firstResult, int maxResults, IDictionary<string, object> parameters);
         string Count(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters);
 
         string Insert(IClassMapper classMap);
+        string BulkInsert<T>(IClassMapper classMap, IEnumerable<T> entities) where T : class;
         string Update(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters, bool ignoreAllKeyProperties);
         string Delete(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters);
 
@@ -136,7 +137,55 @@ namespace DapperExtensions.Sql
 
             return sql.ToString();
         }
-        
+
+        public virtual string BulkInsert<T>(IClassMapper classMap, IEnumerable<T> entities) where T : class
+        {
+            var columns = classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.TriggerIdentity)).ToList();
+            var columnNames = columns.Select(p => GetColumnName(classMap, p, false));
+
+            var sql = new StringBuilder();
+            sql.AppendLine($"INSERT INTO {GetTableName(classMap)} ({columnNames.AppendStrings()}) VALUES ");
+
+            foreach (var e in entities)
+            {
+                var properties = classMap.Properties.Select(p => p.PropertyInfo).ToList();
+                if (!properties.Count.Equals(0))
+                {
+                    if (sql.ToString().Trim().EndsWith("VALUES")) { sql.Append("("); }
+                    else { sql.AppendLine(",").Append("("); }
+
+                    properties.ForEach(p =>
+                    {
+                        if (properties.IndexOf(p) > 0) sql.Append(",");
+
+                        if (p.PropertyType.Name.Equals("String")
+                        || p.PropertyType.Name.Equals("DateTime")
+                        || p.PropertyType.Name.Equals("Guid")
+                        || (p.PropertyType.Name.Equals("Nullable`1") &&
+                            !p.PropertyType.GenericTypeArguments.Count().Equals(0) &&
+                            p.PropertyType.GenericTypeArguments[0].Name.Equals("DateTime"))
+                        || (p.PropertyType.Name.Equals("Nullable`1") &&
+                            !p.PropertyType.GenericTypeArguments.Count().Equals(0) &&
+                            p.PropertyType.GenericTypeArguments[0].Name.Equals("Guid")))
+                        {
+                            sql.Append($"'{Convert.ToString(p.GetValue(e) as object).Replace("'", "''")}'");
+                        }
+                        else if (p.PropertyType.Name.Equals("Boolean"))
+                        {
+                            sql.Append($"{(Convert.ToBoolean(p.GetValue(e)) ? 1 : 0)}");
+                        }
+                        else
+                        {
+                            sql.Append($"{p.GetValue(e) ?? 0}");
+                        }
+                    });
+                    sql.Append(")");
+                }
+            }
+
+            return sql.ToString();
+        }
+
         public virtual string Insert(IClassMapper classMap)
         {
             var columns = classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.TriggerIdentity));
@@ -177,7 +226,7 @@ namespace DapperExtensions.Sql
             {
                 throw new ArgumentNullException("Parameters");
             }
-            
+
             var columns = ignoreAllKeyProperties
                 ? classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly) && p.KeyType == KeyType.NotAKey)
                 : classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.Assigned));
@@ -198,7 +247,7 @@ namespace DapperExtensions.Sql
                 setSql.AppendStrings(),
                 predicate.GetSql(this, parameters));
         }
-        
+
         public virtual string Delete(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters)
         {
             if (predicate == null)
@@ -215,7 +264,7 @@ namespace DapperExtensions.Sql
             sql.Append(" WHERE ").Append(predicate.GetSql(this, parameters));
             return sql.ToString();
         }
-        
+
         public virtual string IdentitySql(IClassMapper classMap)
         {
             return Configuration.Dialect.GetIdentitySql(GetTableName(classMap));

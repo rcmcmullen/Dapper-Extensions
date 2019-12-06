@@ -132,6 +132,30 @@ namespace DapperExtensions
         }
 
         /// <summary>
+        /// Executes a delete query for the specified entity.
+        /// </summary>
+        public static bool BulkDelete<T>(this IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
+        {
+            return Instance.BulkDelete<T>(connection, entities, transaction, commandTimeout);
+        }
+
+        /// <summary>
+        /// Executes an insert query for the specified entity.
+        /// </summary>
+        public static void BulkInsert<T>(this IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
+        {
+            Instance.BulkInsert<T>(connection, entities, transaction, commandTimeout);
+        }
+
+        /// <summary>
+        /// Executes an update query for the specified entity.
+        /// </summary>
+        public static bool BulkUpdate<T>(this IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction = null, int? commandTimeout = null, bool ignoreAllKeyProperties = false) where T : class
+        {
+            return Instance.BulkUpdate<T>(connection, entities, transaction, commandTimeout, ignoreAllKeyProperties);
+        }
+
+        /// <summary>
         /// Executes a query for the specified id, returning the data typed as per T
         /// </summary>
         public static T Get<T>(this IDbConnection connection, dynamic id, IDbTransaction transaction = null, int? commandTimeout = null) where T : class

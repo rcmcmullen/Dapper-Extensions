@@ -1,11 +1,10 @@
-﻿using System;
+﻿using DapperExtensions.Mapper;
+using DapperExtensions.Sql;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Text;
-using DapperExtensions.Mapper;
-using DapperExtensions.Sql;
 
 namespace DapperExtensions
 {

@@ -15,3 +15,6 @@ StyleCop.*
 
 # Nuget
 packages
+/UpgradeLog.htm
+/Backup
+/.vs/DapperExtensions/v15/Server/sqlite3

@@ -1,26 +1,29 @@
-﻿using System;
+﻿using Dapper;
+using DapperExtensions.Mapper;
+using DapperExtensions.Sql;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Dynamic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using Dapper;
-using DapperExtensions.Mapper;
-using DapperExtensions.Sql;
 
 namespace DapperExtensions
 {
     public interface IDapperImplementor
     {
         ISqlGenerator SqlGenerator { get; }
+        bool BulkDelete<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout) where T : class;
+        void BulkInsert<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout) where T : class;
+        bool BulkUpdate<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout, bool ignoreAllKeyProperties) where T : class;
         T Get<T>(IDbConnection connection, dynamic id, IDbTransaction transaction, int? commandTimeout) where T : class;
         void Insert<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout) where T : class;
         dynamic Insert<T>(IDbConnection connection, T entity, IDbTransaction transaction, int? commandTimeout) where T : class;
         bool Update<T>(IDbConnection connection, T entity, IDbTransaction transaction, int? commandTimeout, bool ignoreAllKeyProperties) where T : class;
         bool Delete<T>(IDbConnection connection, T entity, IDbTransaction transaction, int? commandTimeout) where T : class;
         bool Delete<T>(IDbConnection connection, object predicate, IDbTransaction transaction, int? commandTimeout) where T : class;
-        IEnumerable<T> GetList<T>(IDbConnection connection, object predicate, IList<ISort> sort, IDbTransaction transaction, int? commandTimeout, bool buffered) where T : class;        
+        IEnumerable<T> GetList<T>(IDbConnection connection, object predicate, IList<ISort> sort, IDbTransaction transaction, int? commandTimeout, bool buffered) where T : class;
         IEnumerable<T> GetPage<T>(IDbConnection connection, object predicate, IList<ISort> sort, int page, int resultsPerPage, IDbTransaction transaction, int? commandTimeout, bool buffered) where T : class;
         IEnumerable<T> GetSet<T>(IDbConnection connection, object predicate, IList<ISort> sort, int firstResult, int maxResults, IDbTransaction transaction, int? commandTimeout, bool buffered) where T : class;
         int Count<T>(IDbConnection connection, object predicate, IDbTransaction transaction, int? commandTimeout) where T : class;
@@ -35,6 +38,66 @@ namespace DapperExtensions
         }
 
         public ISqlGenerator SqlGenerator { get; private set; }
+
+        public bool BulkDelete<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout) where T : class
+        {
+            if (!SqlGenerator.SupportsMultipleStatements())
+            {
+                throw new Exception("Bulk Operations are not supported");
+            }
+            IClassMapper classMap = SqlGenerator.Configuration.GetMap<T>();
+            IPredicate predicate = null;
+            var dynamicParameters = new DynamicParameters();
+            var parameters = new Dictionary<string, object>();
+            var sql = new StringBuilder();
+
+            entities.ToList().ForEach(e =>
+            {
+                predicate = GetKeyPredicate<T>(classMap, e);
+                sql.Append(SqlGenerator.Delete(classMap, predicate, parameters))
+                    .AppendLine(";");
+            });
+
+            foreach (var parameter in parameters)
+            {
+                dynamicParameters.Add(parameter.Key, parameter.Value);
+            }
+
+            return connection.Execute(sql.ToString(), dynamicParameters, transaction, commandTimeout, CommandType.Text) > 0;
+        }
+
+        public void BulkInsert<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout) where T : class
+        {
+            if (!SqlGenerator.SupportsMultipleStatements())
+            {
+                throw new Exception("Bulk Operations are not supported");
+            }
+            var classMap = SqlGenerator.Configuration.GetMap<T>();
+            var sql = SqlGenerator.BulkInsert(classMap, entities);
+
+            connection.Execute(sql, null, transaction, commandTimeout, CommandType.Text);
+        }
+
+        public bool BulkUpdate<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout, bool ignoreAllKeyProperties = false) where T : class
+        {
+            if (!SqlGenerator.SupportsMultipleStatements())
+            {
+                throw new Exception("Bulk Operations are not supported");
+            }
+            IClassMapper classMap = SqlGenerator.Configuration.GetMap<T>();
+            IPredicate predicate = null;
+            var parameters = new Dictionary<string, object>();
+            var sql = new StringBuilder();
+
+            entities.ToList().ForEach(e =>
+            {
+                predicate = GetKeyPredicate<T>(classMap, e);
+                sql.Append(SqlGenerator.Update(classMap, predicate, parameters, ignoreAllKeyProperties))
+                    .AppendLine(";");
+            });
+
+            return connection.Execute(sql.ToString(), null, transaction, commandTimeout, CommandType.Text) > 0;
+        }
 
         public T Get<T>(IDbConnection connection, dynamic id, IDbTransaction transaction, int? commandTimeout) where T : class
         {
@@ -54,7 +117,7 @@ namespace DapperExtensions
             var parameters = new List<DynamicParameters>();
             if (triggerIdentityColumn != null)
             {
-                properties = typeof (T).GetProperties(BindingFlags.GetProperty | BindingFlags.Instance | BindingFlags.Public)
+                properties = typeof(T).GetProperties(BindingFlags.GetProperty | BindingFlags.Instance | BindingFlags.Public)
                     .Where(p => p.Name != triggerIdentityColumn.PropertyInfo.Name);
             }
 
@@ -195,8 +258,8 @@ namespace DapperExtensions
             string sql = SqlGenerator.Update(classMap, predicate, parameters, ignoreAllKeyProperties);
             DynamicParameters dynamicParameters = new DynamicParameters();
 
-            var columns = ignoreAllKeyProperties 
-                ? classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly) && p.KeyType == KeyType.NotAKey) 
+            var columns = ignoreAllKeyProperties
+                ? classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly) && p.KeyType == KeyType.NotAKey)
                 : classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.Assigned));
 
             foreach (var property in ReflectionHelper.GetObjectValues(entity).Where(property => columns.Any(c => c.Name == property.Key)))
@@ -367,10 +430,10 @@ namespace DapperExtensions
             return predicates.Count == 1
                        ? predicates[0]
                        : new PredicateGroup
-                             {
-                                 Operator = GroupOperator.And,
-                                 Predicates = predicates
-                             };
+                       {
+                           Operator = GroupOperator.And,
+                           Predicates = predicates
+                       };
         }
 
         protected IPredicate GetKeyPredicate<T>(IClassMapper classMap, T entity) where T : class
@@ -383,20 +446,20 @@ namespace DapperExtensions
 
             IList<IPredicate> predicates = (from field in whereFields
                                             select new FieldPredicate<T>
-                                                       {
-                                                           Not = false,
-                                                           Operator = Operator.Eq,
-                                                           PropertyName = field.Name,
-                                                           Value = field.PropertyInfo.GetValue(entity, null)
-                                                       }).Cast<IPredicate>().ToList();
+                                            {
+                                                Not = false,
+                                                Operator = Operator.Eq,
+                                                PropertyName = field.Name,
+                                                Value = field.PropertyInfo.GetValue(entity, null)
+                                            }).Cast<IPredicate>().ToList();
 
             return predicates.Count == 1
                        ? predicates[0]
                        : new PredicateGroup
-                             {
-                                 Operator = GroupOperator.And,
-                                 Predicates = predicates
-                             };
+                       {
+                           Operator = GroupOperator.And,
+                           Predicates = predicates
+                       };
         }
 
         protected IPredicate GetEntityPredicate(IClassMapper classMap, object entity)
