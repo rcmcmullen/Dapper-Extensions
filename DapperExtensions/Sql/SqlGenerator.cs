@@ -16,7 +16,9 @@ namespace DapperExtensions.Sql
         string Count(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters);
 
         string Insert(IClassMapper classMap);
+        string BulkInsert(IEnumerable<IClassMapper> classMaps);
         string BulkInsert<T>(IClassMapper classMap, IEnumerable<T> entities) where T : class;
+        string BulkUpdate(IClassMapper classMap, IEnumerable<IPredicate> predicates, IDictionary<string, object> parameters, bool ignoreAllKeyProperties);
         string Update(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters, bool ignoreAllKeyProperties);
         string Delete(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters);
 
@@ -138,6 +140,69 @@ namespace DapperExtensions.Sql
             return sql.ToString();
         }
 
+        public virtual string BulkInsert(IEnumerable<IClassMapper> classMaps)
+        {
+            if (classMaps == null || classMaps.Count().Equals(0))
+            {
+                throw new ArgumentException("ClassMaps");
+            }
+
+            var sql = new StringBuilder();
+
+            var tableNames = classMaps.Distinct(new ClassMapComparer()).ToList();
+
+            tableNames.ForEach(tn =>
+            {
+                var columns = tn.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.TriggerIdentity)).ToList();
+                var columnNames = columns.Select(p => GetColumnName(tn, p, false));
+                sql.AppendLine($"INSERT INTO {GetTableName(tn)} ({columnNames.AppendStrings()}) VALUES ");
+
+                var classMapList = classMaps.ToList();
+                for (int i = 0; i < classMapList.Count; i++)
+                {
+                    if (i > 0) sql.Append(",").AppendLine();
+                    var parameters = columns.Select(p => Configuration.Dialect.ParameterPrefix + p.Name);
+                    sql.Append($"({parameters.AppendStrings(suffix: i.ToString())})");
+
+                    //var properties = classMap.Properties.Select(p => p.PropertyInfo).ToList();
+                    //if (!properties.Count.Equals(0))
+                    //{
+                    //    if (sql.ToString().Trim().EndsWith("VALUES")) { sql.Append("("); }
+                    //    else { sql.AppendLine(",").Append("("); }
+
+                    //    properties.ForEach(p =>
+                    //    {
+                    //        if (properties.IndexOf(p) > 0) sql.Append(",");
+
+                    //        if (p.PropertyType.Name.Equals("String")
+                    //        || p.PropertyType.Name.Equals("DateTime")
+                    //        || p.PropertyType.Name.Equals("Guid")
+                    //        || (p.PropertyType.Name.Equals("Nullable`1") &&
+                    //            !p.PropertyType.GenericTypeArguments.Count().Equals(0) &&
+                    //            p.PropertyType.GenericTypeArguments[0].Name.Equals("DateTime"))
+                    //        || (p.PropertyType.Name.Equals("Nullable`1") &&
+                    //            !p.PropertyType.GenericTypeArguments.Count().Equals(0) &&
+                    //            p.PropertyType.GenericTypeArguments[0].Name.Equals("Guid")))
+                    //        {
+                    //            sql.Append($"'{Convert.ToString(p.GetValue(e) as object).Replace("'", "''")}'");
+                    //        }
+                    //        else if (p.PropertyType.Name.Equals("Boolean"))
+                    //        {
+                    //            sql.Append($"{(Convert.ToBoolean(p.GetValue(e)) ? 1 : 0)}");
+                    //        }
+                    //        else
+                    //        {
+                    //            sql.Append($"{p.GetValue(e) ?? 0}");
+                    //        }
+                    //    });
+                    //    sql.Append(")");
+                    //}
+                };
+            });
+
+            return sql.ToString();
+        }
+
         public virtual string BulkInsert<T>(IClassMapper classMap, IEnumerable<T> entities) where T : class
         {
             var columns = classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.TriggerIdentity)).ToList();
@@ -213,6 +278,46 @@ namespace DapperExtensions.Sql
             }
 
             return sql;
+        }
+
+        public virtual string BulkUpdate(IClassMapper classMap, IEnumerable<IPredicate> predicates, IDictionary<string, object> parameters, bool ignoreAllKeyProperties)
+        {
+            if (predicates.Count().Equals(0))
+            {
+                throw new ArgumentNullException("Predicates");
+            }
+
+            if (parameters == null)
+            {
+                throw new ArgumentNullException("Parameters");
+            }
+
+            var sql = new StringBuilder();
+
+            var columns = ignoreAllKeyProperties
+                ? classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly) && p.KeyType == KeyType.NotAKey)
+                : classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.Assigned));
+
+            if (!columns.Any())
+            {
+                throw new ArgumentException("No columns were mapped.");
+            }
+
+            var predicateList = predicates.ToList();
+            predicateList.ForEach(predicate =>
+            {
+                var setSql =
+                    columns.Select(
+                        p =>
+                        $"{GetColumnName(classMap, p, false)} = {Configuration.Dialect.ParameterPrefix}{p.Name}_{predicateList.IndexOf(predicate)}");
+
+                sql.AppendLine(string.Format("UPDATE {0} SET {1} WHERE {2};",
+                    GetTableName(classMap),
+                    setSql.AppendStrings(),
+                    predicate.GetSql(this, parameters)));
+            });
+
+            return sql.ToString();
         }
 
         public virtual string Update(IClassMapper classMap, IPredicate predicate, IDictionary<string, object> parameters, bool ignoreAllKeyProperties)
@@ -308,6 +413,37 @@ namespace DapperExtensions.Sql
                 .Where(p => !p.Ignored)
                 .Select(p => GetColumnName(classMap, p, true));
             return columns.AppendStrings();
+        }
+    }
+
+    class ClassMapComparer : IEqualityComparer<IClassMapper>
+    {
+        public bool Equals(IClassMapper x, IClassMapper y)
+        {
+            //Check whether the compared objects reference the same data.
+            if (object.ReferenceEquals(x, y)) return true;
+
+            //Check whether any of the compared objects is null.
+            if (object.ReferenceEquals(x, null) || object.ReferenceEquals(y, null))
+                return false;
+
+            //Check whether the products' properties are equal.
+            return x.SchemaName == y.SchemaName && x.TableName == y.TableName;
+        }
+
+        public int GetHashCode(IClassMapper map)
+        {
+            //Check whether the object is null
+            if (object.ReferenceEquals(map, null)) return 0;
+
+            //Get hash code for the Name field if it is not null.
+            int hashMapTableName = string.IsNullOrEmpty(map.TableName) ? 0 : map.TableName.GetHashCode();
+
+            //Get hash code for the Code field.
+            int hashMapSchemaName = string.IsNullOrEmpty(map.SchemaName) ? 0 : map.SchemaName.GetHashCode();
+
+            //Calculate the hash code for the product.
+            return hashMapTableName ^ hashMapSchemaName;
         }
     }
 }

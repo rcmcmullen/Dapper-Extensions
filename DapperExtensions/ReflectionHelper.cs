@@ -81,6 +81,14 @@ namespace DapperExtensions
                 sb => sb.ToString());
         }
 
+        public static string AppendStrings(this IEnumerable<string> list, string suffix, string seperator = ", ")
+        {
+            return list.Aggregate(
+                new StringBuilder(),
+                (sb, s) => (sb.Length == 0 ? sb : sb.Append(seperator)).AppendFormat("{0}_{1}", s, suffix),
+                sb => sb.ToString());
+        }
+
         public static bool IsSimpleType(Type type)
         {
             Type actualType = type;

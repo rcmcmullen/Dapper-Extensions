@@ -13,6 +13,7 @@ namespace DapperExtensions.Sql
         bool SupportsMultipleStatements { get; }
         char ParameterPrefix { get; }
         string EmptyExpression { get; }
+        int MaximumParameters { get; }
         string GetTableName(string schemaName, string tableName, string alias);
         string GetColumnName(string prefix, string columnName, string alias);
         string GetIdentitySql(string tableName);
@@ -59,6 +60,8 @@ namespace DapperExtensions.Sql
                 return "1=1";
             }
         }
+
+        public virtual int MaximumParameters { get { return 2100; } }
 
         public virtual string GetTableName(string schemaName, string tableName, string alias)
         {

@@ -43,9 +43,10 @@ namespace DapperExtensions
         {
             if (!SqlGenerator.SupportsMultipleStatements())
             {
-                throw new Exception("Bulk Operations are not supported");
+                throw new NotImplementedException("Bulk Operations are not supported by this Database");
             }
-            IClassMapper classMap = SqlGenerator.Configuration.GetMap<T>();
+
+            var classMap = SqlGenerator.Configuration.GetMap<T>();
             IPredicate predicate = null;
             var dynamicParameters = new DynamicParameters();
             var parameters = new Dictionary<string, object>();
@@ -70,33 +71,93 @@ namespace DapperExtensions
         {
             if (!SqlGenerator.SupportsMultipleStatements())
             {
-                throw new Exception("Bulk Operations are not supported");
+                throw new NotImplementedException("Bulk Operations are not supported by this Database");
             }
-            var classMap = SqlGenerator.Configuration.GetMap<T>();
-            var sql = SqlGenerator.BulkInsert(classMap, entities);
 
-            connection.Execute(sql, null, transaction, commandTimeout, CommandType.Text);
+            var classMap = SqlGenerator.Configuration.GetMap<T>();
+            var classMaps = new List<IClassMapper>();
+            var dynamicParameters = new DynamicParameters();
+
+            var columns = classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.Assigned)).ToList();
+            var batchSize = (int)Math.Floor((double)SqlGenerator.Configuration.Dialect.MaximumParameters / columns.Count());
+            var batch = 0;
+
+            var entityList = entities.Skip(batch * batchSize).Take(batchSize).ToList();
+            while (entityList != null && !entityList.Count().Equals(0))
+            {
+                entityList.ForEach(e =>
+                {
+                    columns.ForEach(column =>
+                    {
+                        dynamicParameters.Add($"{SqlGenerator.Configuration.Dialect.ParameterPrefix}{column.Name}_{entityList.IndexOf(e)}", column.PropertyInfo.GetValue(e));
+                    });
+
+                    classMaps.Add(classMap);
+                });
+
+                var sql = SqlGenerator.BulkInsert(classMaps);
+
+                connection.Execute(sql, dynamicParameters, transaction, commandTimeout, CommandType.Text);
+
+                batch++;
+                classMaps.Clear();
+                entityList = entities.Skip(batch * batchSize).Take(batchSize).ToList();
+            }
         }
 
         public bool BulkUpdate<T>(IDbConnection connection, IEnumerable<T> entities, IDbTransaction transaction, int? commandTimeout, bool ignoreAllKeyProperties = false) where T : class
         {
             if (!SqlGenerator.SupportsMultipleStatements())
             {
-                throw new Exception("Bulk Operations are not supported");
+                throw new NotImplementedException("Bulk Operations are not supported by this Database");
             }
-            IClassMapper classMap = SqlGenerator.Configuration.GetMap<T>();
+
+            var classMap = SqlGenerator.Configuration.GetMap<T>();
             IPredicate predicate = null;
+            var predicates = new List<IPredicate>();
+            var dynamicParameters = new DynamicParameters();
             var parameters = new Dictionary<string, object>();
-            var sql = new StringBuilder();
 
-            entities.ToList().ForEach(e =>
+            var success = true;
+            var sql = string.Empty;
+
+            var columns = ignoreAllKeyProperties
+                ? classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly) && p.KeyType == KeyType.NotAKey).ToList()
+                : classMap.Properties.Where(p => !(p.Ignored || p.IsReadOnly || p.KeyType == KeyType.Identity || p.KeyType == KeyType.Assigned)).ToList();
+            var batchSize = (int)Math.Floor((double)SqlGenerator.Configuration.Dialect.MaximumParameters / columns.Count());
+            var batch = 0;
+
+            var entityList = entities.Skip(batch * batchSize).Take(batchSize).ToList();
+            while (entityList != null && !entityList.Count().Equals(0))
             {
-                predicate = GetKeyPredicate<T>(classMap, e);
-                sql.Append(SqlGenerator.Update(classMap, predicate, parameters, ignoreAllKeyProperties))
-                    .AppendLine(";");
-            });
+                entityList.ForEach(e =>
+                {
+                    predicate = GetKeyPredicate<T>(classMap, e);
 
-            return connection.Execute(sql.ToString(), null, transaction, commandTimeout, CommandType.Text) > 0;
+                    foreach (var property in ReflectionHelper.GetObjectValues(e).Where(property => columns.Any(c => c.Name == property.Key)))
+                    {
+                        dynamicParameters.Add($"{SqlGenerator.Configuration.Dialect.ParameterPrefix}{property.Key}_{entityList.IndexOf(e)}", property.Value);
+                    }
+
+                    predicates.Add(predicate);
+                });
+
+                sql = SqlGenerator.BulkUpdate(classMap, predicates, parameters, ignoreAllKeyProperties);
+
+                foreach (var parameter in parameters)
+                {
+                    dynamicParameters.Add(parameter.Key, parameter.Value);
+                }
+
+
+                success = connection.Execute(sql, dynamicParameters, transaction, commandTimeout, CommandType.Text) > 0;
+
+                batch++;
+                predicates.Clear();
+                entityList = entities.Skip(batch * batchSize).Take(batchSize).ToList();
+            }
+
+            return success;
         }
 
         public T Get<T>(IDbConnection connection, dynamic id, IDbTransaction transaction, int? commandTimeout) where T : class
